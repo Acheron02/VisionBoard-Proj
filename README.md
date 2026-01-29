@@ -102,12 +102,11 @@ python main.py
 - **Jayvenn Pablico**  
 - **Christian Jalliel Uriarte**
 
-BS Computer Engineering  
-National University – Fairview  
+BS Computer Engineering at National University – Fairview
 Electives Project
 
 ---
 
 ## 📜 License
 
-This project is for academic use. Licensing details can be added if the project is released publicly.
+This project is for academic use only.
