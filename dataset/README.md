@@ -54,4 +54,4 @@ All experiments are conducted under **controlled imaging conditions** to ensure 
 
 ## 📄 Disclaimer
 
-This dataset is intended for **academic and research purposes only**. Redistribution or commercial use may require additional permissions depending on the data source.
+This dataset is intended for **academic and research purposes only**. Redistribution or commercial use may require additional permissions.
