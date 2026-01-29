@@ -95,14 +95,16 @@ python main.py
 
 ---
 
-## 👨‍🎓 Authors
+## 👨‍🎓 Developed By
 
-# Developed by 
-# **Christian Angelo Palebino**, 
-# **Mike Jasper Lingasin**,
-# **Jayvenn Pablico**, 
-# **Christian Jalliel Uriarte**
-# BS Computer Engineering at National University - Fairview for Electives Project
+- **Christian Angelo Palebino**  
+- **Mike Jasper Lingasin**  
+- **Jayvenn Pablico**  
+- **Christian Jalliel Uriarte**
+
+BS Computer Engineering  
+National University – Fairview  
+Electives Project
 
 ---
 
