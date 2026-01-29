@@ -97,7 +97,11 @@ python main.py
 
 ## 👨‍🎓 Authors
 
-Developed by **Christian Angelo Palebino**, **Mike Jasper Lingasin**, **Jayvenn Pablico**, **Christian Jalliel Uriarte**
+Developed by 
+**Christian Angelo Palebino**, 
+**Mike Jasper Lingasin**,
+**Jayvenn Pablico**, 
+**Christian Jalliel Uriarte**
 BS Computer Engineering at National University - Fairview for Electives Project
 
 ---
