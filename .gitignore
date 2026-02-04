@@ -1,10 +1,13 @@
-.venv/
+# Python virtual environment
+venv/
 .env
 
-/machine_learning_models/
-/error_logs/
-/captured_images/
-/annotated_images/
+# ML artifacts
+machine_learning_models/
+error_logs/
+captured_images/
+annotated_images/
 
-___pycache__/
-.pyc
+# Python cache
+__pycache__/
+*.pyc
