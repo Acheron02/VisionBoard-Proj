@@ -217,12 +217,12 @@ class CameraPage(tk.Frame):
         model_cfg = self.model_configs[self.model_name]
         pipeline = SingleModelPipeline(
             model_path=self.model_paths[self.model_name],
-            model_config=model_cfg
+            model_config=model_cfg,
+            enable_trace=(self.model_name.lower() == "model 1")
         )
         result = pipeline.run(
             image_path=image_path,
             annotated_dir=self.annotated_dir,
-            model_name=self.model_name
         )
 
         if result is None:

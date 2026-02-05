@@ -11,7 +11,7 @@
             "max_det": 100
         },
         "Model 2": {
-            "conf": 0.1,
+            "conf": 0.25,
             "iou": 0.5,
             "max_det": 200
         },

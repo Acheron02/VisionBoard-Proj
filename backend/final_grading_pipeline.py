@@ -4,11 +4,11 @@ import numpy as np
 import json
 from ultralytics import YOLO
 from ui.theme import theme
+from backend.run_trace_detection import run_trace_detection_and_save
 
 CONFIG_PATH = "/home/jmc2/VisionBoard-Proj/config/grading_config.json"
 
 # ---------------------- Defaults ----------------------
-# Define DEFAULT_DEFECT_COLORS before using it in DEFAULT_CONFIG
 DEFAULT_DEFECT_COLORS = theme.themes["dark"]["defect_colors"]
 
 DEFAULT_CONFIG = {
@@ -20,9 +20,6 @@ DEFAULT_CONFIG = {
 
 # ---------------------- Helpers ----------------------
 def load_grading_config():
-    """
-    Loads grading_config.json, merges with defaults.
-    """
     if not os.path.exists(CONFIG_PATH):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
@@ -47,30 +44,15 @@ def load_grading_config():
     return cfg
 
 def get_custom_color(label, custom_colors=None):
-    """
-    Returns the BGR color for a defect label.
-
-    Priority:
-    1. custom_colors dict (from grading config)
-    2. current theme defect_colors
-    3. fallback to white (255, 255, 255)
-    """
     if custom_colors is None:
         custom_colors = {}
 
-    # Try grading config first
     rgb = custom_colors.get(label)
-
-    # Fallback to theme
     if rgb is None:
         rgb = theme.colors().get("defect_colors", {}).get(label, (255, 255, 255))
-
-    # Convert RGB to BGR for OpenCV
-    bgr = tuple(reversed(rgb))
-    return bgr
+    return tuple(reversed(rgb))  # RGB -> BGR
 
 def resolve_model_paths(paths):
-    """Given a list of folders or .pt files, return all .pt file paths."""
     all_paths = []
     for p in paths:
         if os.path.isfile(p) and p.endswith(".pt"):
@@ -79,24 +61,19 @@ def resolve_model_paths(paths):
             all_paths.extend([os.path.join(p, f) for f in os.listdir(p) if f.endswith(".pt")])
     return all_paths
 
-
 # ---------------------- FinalGradingPipeline ----------------------
 class FinalGradingPipeline:
     def __init__(self, model_a_paths: list, model_b_paths: list, model_configs: dict):
         self.model_configs = model_configs
-
-        # Resolve folder paths into individual .pt files
         self.model_a_paths = resolve_model_paths(model_a_paths)
         self.model_b_paths = resolve_model_paths(model_b_paths)
-
-        # Load YOLO models
         self.model_a = [YOLO(p) for p in self.model_a_paths]
         self.model_b = [YOLO(p) for p in self.model_b_paths]
 
     def run(self, image_path: str, annotated_dir: str):
         cfg = load_grading_config()
-        MIN_BOX_W = int(cfg.get("MIN_BOX_WIDTH", 4))
-        MIN_BOX_H = int(cfg.get("MIN_BOX_HEIGHT", 4))
+        MIN_BOX_W = int(cfg.get("MIN_BOX_WIDTH", 6))
+        MIN_BOX_H = int(cfg.get("MIN_BOX_HEIGHT", 6))
         CUSTOM_DEFECT_COLORS = cfg.get("CUSTOM_DEFECT_COLORS", DEFAULT_DEFECT_COLORS)
         DEFECT_GRADE_THRESHOLDS = cfg["DEFECT_GRADE_THRESHOLDS"]
 
@@ -115,16 +92,19 @@ class FinalGradingPipeline:
 
         defects_per_model = {}
 
-        # ---------------------------
-        # Helper to run a list of models
-        # ---------------------------
+        # --------------------------- Helper to run YOLO models ---------------------------
         def run_models(models_list, all_boxes_accum, all_labels_accum, all_scores_accum):
             for model in models_list:
                 model_name = getattr(model, "path", str(model))
                 cfg_model = self.model_configs.get(model_name, {"conf": 0.25, "iou": 0.5, "max_det": 300})
-                results = model.predict(image_path, conf=cfg_model["conf"], iou=cfg_model["iou"], max_det=cfg_model["max_det"], save=False)
+                results = model.predict(
+                    image_path,
+                    conf=cfg_model["conf"],
+                    iou=cfg_model["iou"],
+                    max_det=cfg_model["max_det"],
+                    save=False
+                )
                 model_defects = []
-
                 if results and results[0].boxes is not None:
                     boxes = results[0].boxes
                     names = model.names
@@ -135,24 +115,18 @@ class FinalGradingPipeline:
                         bw, bh = x2 - x1, y2 - y1
                         area = bw * bh
                         area_ratio = area / img_area
-
                         if bw < MIN_BOX_W or bh < MIN_BOX_H or area < 50 or area_ratio < 0.0001:
                             continue
-
                         cls_id = int(boxes.cls[i])
                         label = names.get(cls_id, "unknown")
                         score = float(boxes.conf[i])
-
                         model_defects.append({"label": label, "bbox": (x1, y1, x2, y2)})
                         all_boxes_accum.append([x1, y1, x2, y2])
                         all_labels_accum.append(label)
                         all_scores_accum.append(score)
-
                 defects_per_model[model_name] = model_defects
 
-        # ---------------------------
-        # Stage 1: model_a
-        # ---------------------------
+        # --------------------------- Stage 1: model_a ---------------------------
         all_boxes_a, all_labels_a, all_scores_a = [], [], []
         run_models(self.model_a, all_boxes_a, all_labels_a, all_scores_a)
 
@@ -167,9 +141,7 @@ class FinalGradingPipeline:
                 final_boxes.append(lbl_boxes[i])
                 final_labels.append(lbl)
 
-        # ---------------------------
-        # Stage 2: model_b
-        # ---------------------------
+        # --------------------------- Stage 2: model_b ---------------------------
         all_boxes_b, all_labels_b, all_scores_b = [], [], []
         run_models(self.model_b, all_boxes_b, all_labels_b, all_scores_b)
 
@@ -188,9 +160,18 @@ class FinalGradingPipeline:
                 merged_final_boxes.append(lbl_boxes[i])
                 merged_final_labels.append(lbl)
 
-        # ---------------------------
-        # Draw boxes
-        # ---------------------------
+        # --------------------------- Stage 3: Trace detection ---------------------------
+        trace_image_path, trace_distances, trace_coords = run_trace_detection_and_save(img, visualize=True)
+
+        # Add trace violations as defects
+        if trace_coords:
+            for idx, trace_meta in enumerate(trace_coords):
+                merged_final_labels.append(f"trace_violation")
+                x1, y1 = int(trace_meta['start'][0]), int(trace_meta['start'][1])
+                x2, y2 = int(trace_meta['end'][0]), int(trace_meta['end'][1])
+                merged_final_boxes.append([x1, y1, x2, y2])
+
+        # --------------------------- Draw all boxes ---------------------------
         defect_summary = {}
         merged_defects = []
 
@@ -201,10 +182,12 @@ class FinalGradingPipeline:
             defect_summary[label] = defect_summary.get(label, 0) + 1
             merged_defects.append({"label": label, "bbox": (x1, y1, x2, y2)})
 
+        # Save annotated image
         os.makedirs(annotated_dir, exist_ok=True)
         out_path = os.path.join(annotated_dir, os.path.basename(image_path))
         cv2.imwrite(out_path, annotated_img)
 
+        # Compute grade
         total_defects = sum(defect_summary.values())
         grade = self.compute_grade(total_defects, DEFECT_GRADE_THRESHOLDS) if total_defects > 0 else "Pass"
 
@@ -212,6 +195,9 @@ class FinalGradingPipeline:
             "defect_summary": defect_summary,
             "defects_per_model": defects_per_model,
             "merged_defects_final": merged_defects,
+            "trace_image_path": trace_image_path,
+            "trace_distances": trace_distances,
+            "trace_coords": trace_coords,
             "grade": grade,
             "annotated_image_path": out_path
         }
@@ -243,30 +229,11 @@ class FinalGradingPipeline:
 
     @staticmethod
     def compute_grade(total_defects: int, thresholds: dict) -> str:
-        """
-        Compute grade using custom text thresholds.
-        
-        thresholds: dict of form {
-            "Pass": 15,
-            "Minor Severity": 30,
-            "Major Severity": 80
-        }
-        - Interpreted as MAX defects allowed for each grade
-        - Anything above the second-to-last threshold -> last grade (Major Severity)
-        """
         if not thresholds:
             return "Pass"
-
-        # Sort thresholds by defect value ascending
         sorted_thresholds = sorted(thresholds.items(), key=lambda x: x[1])
-
-        # Last grade is catch-all for Major Severity
         last_grade_label, last_threshold = sorted_thresholds[-1]
-
-        # Iterate through grades except last
         for grade_label, max_defects in sorted_thresholds[:-1]:
             if total_defects <= max_defects:
                 return grade_label
-
-        # Anything beyond previous thresholds -> last grade (Major Severity)
         return last_grade_label

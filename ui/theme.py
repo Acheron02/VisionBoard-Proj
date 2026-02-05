@@ -28,6 +28,7 @@ class ThemeManager:
                     "mc": (255, 255, 0),
                     "resistor": (255, 255, 255),
                     "capacitor": (255, 0, 0),
+                    "trace_violation": (255, 0, 255)
                 },
             },
             "light": {
@@ -47,6 +48,7 @@ class ThemeManager:
                     "mc": (255, 255, 0),
                     "resistor": (255, 255, 255),
                     "capacitor": (255, 0, 0),
+                    "trace_violation": (255, 0, 255)
                 },
             }
         }

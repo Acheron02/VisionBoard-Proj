@@ -1,3 +1,4 @@
+
 import tkinter as tk
 from PIL import Image, ImageTk, ImageDraw
 import os
@@ -62,6 +63,10 @@ def get_full_label(label):
 class ResultsPage(tk.Frame):
     IMAGE_MAX_WIDTH = 800
     IMAGE_MAX_HEIGHT = 420
+    MIN_BOX_W = 4
+    MIN_BOX_H = 4
+    MIN_AREA = 50
+    MAX_AREA_RATIO = 0.95
 
     def __init__(self, parent, show_page, monitor, original_capture_path, model_name,
                  defect_summary=None, defects_per_model=None, grade=None, result_image_path=None):
@@ -75,6 +80,7 @@ class ResultsPage(tk.Frame):
         self.monitor = monitor
         self.model_name = model_name
         self.grade = grade
+        self.enable_trace = (model_name == "Model 1" or model_name == "Final PCB Grading")
 
         # Save original capture separately for Retake button
         self.original_capture_path = original_capture_path
@@ -88,7 +94,6 @@ class ResultsPage(tk.Frame):
             os.path.dirname(original_capture_path),
             "merged_result.png"
         )
-        self._generate_merged_image()
 
         self.LEGEND_COLUMN_WIDTH = 300
 
@@ -159,7 +164,7 @@ class ResultsPage(tk.Frame):
             self.grade_label = tk.Label(
                 self.legend_column,
                 text=f"PCB Grade: {self.grade}",
-                font=(theme.font_bold, theme.sizes["body"]),
+                font=(theme.font_bold, theme.sizes["title2"]),
                 fg=self.colors["text"],
                 bg=self.colors["bg"],
                 justify="center",
@@ -170,6 +175,7 @@ class ResultsPage(tk.Frame):
         # Legend frame inside legend column
         self.legend_frame = tk.Frame(self.legend_column, bg=self.colors["bg"])
         self.legend_frame.grid(row=1, column=0, sticky="n", pady=(0,10))
+        self._generate_merged_image()
         self._build_legend()
         self._render_defect_summary()
 
@@ -207,20 +213,98 @@ class ResultsPage(tk.Frame):
 
     # ---------------- Merge defects into single image ----------------
     def _generate_merged_image(self):
-        # Load the original capture
-        img = Image.open(self.original_capture_path).convert("RGB")
-        draw = ImageDraw.Draw(img)
+        import cv2
+        import numpy as np
+        from PIL import ImageDraw, ImageFont
+        from backend.run_trace_detection import run_trace_detection_and_save
 
-        # Merge all defects from all models
+        # Load original PCB image
+        img_bgr = cv2.imread(self.original_capture_path)
+        if img_bgr is None:
+            print(f"[Error] Failed to load image: {self.original_capture_path}")
+            return
+
+        # Convert to RGB for PIL
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        draw = ImageDraw.Draw(pil_img)
+
+        # Font for labels
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
+        except IOError:
+            font = ImageFont.load_default()
+
+        img_area = pil_img.width * pil_img.height
+
         for model_defects in self.defects_per_model.values():
             for defect in model_defects:
+                if not isinstance(defect, dict) or "bbox" not in defect:
+                    continue
                 x1, y1, x2, y2 = defect["bbox"]
+                bw, bh = x2 - x1, y2 - y1
+                area = bw * bh
+                area_ratio = area / img_area
+                if bw < self.MIN_BOX_W or bh < self.MIN_BOX_H or area < self.MIN_AREA or area_ratio > self.MAX_AREA_RATIO:
+                    continue  # skip invalid/huge boxes
                 color = get_custom_color(defect["label"])
                 draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
 
+        # ---------------- Draw PCB trace clearance ----------------
+        if self.enable_trace:
+            try:
+                # Run detection on BGR image
+                contours, processed_img, trace_coords = run_trace_detection_and_save(img_bgr, visualize=False)
+
+                trace_color = get_custom_color("trace_violation")
+                box_size = 6  # bigger rectangles for visibility
+
+                # Store coords for later use in resize_image
+                self.trace_coords = trace_coords
+
+                for idx, coord in enumerate(trace_coords):
+                    start = tuple(coord["start"])
+                    end   = tuple(coord["end"])
+
+                    # Draw rectangles at start/end
+                    draw.rectangle([start[0]-box_size, start[1]-box_size,
+                                    start[0]+box_size, start[1]+box_size],
+                                outline=trace_color, width=2)
+                    draw.rectangle([end[0]-box_size, end[1]-box_size,
+                                    end[0]+box_size, end[1]+box_size],
+                                outline=trace_color, width=2)
+
+                    # Draw connecting line
+                    draw.line([start, end], fill=trace_color, width=4)
+
+                    # Draw label T1, T2, ... with small white background for readability
+                    label_text = f"T{idx+1}"
+                    text_offset = (8, -8)
+                    x, y = start[0]+text_offset[0], start[1]+text_offset[1]
+
+                    # Draw white rectangle behind text
+                    text_w, text_h = draw.textsize(label_text, font=font)
+                    draw.rectangle([x-1, y-1, x+text_w+1, y+text_h+1], fill=(255,255,255))
+                    draw.text((x, y), label_text, fill=trace_color, font=font)
+
+            except Exception as e:
+                print(f"[Trace Annotation] Failed: {e}")
+        else:
+            self.trace_coords = []
+
         # Save merged image
         os.makedirs(os.path.dirname(self.result_image_path), exist_ok=True)
-        img.save(self.result_image_path)
+        pil_img.save(self.result_image_path)
+
+        self.original_image = pil_img  # used by resize_image()
+
+        # Merge trace violations into defect summary
+        if self.enable_trace:
+            self.defect_summary["trace_violation"] = len(self.trace_coords)
+        self._defect_summary_initialized = True
+
+        # Refresh legend and feedback
+        self._render_defect_summary()
 
     # ---------------- Top Bar ----------------
     def _build_top_bar(self):
@@ -299,9 +383,18 @@ class ResultsPage(tk.Frame):
     # ---------------- Legend ----------------
     def _build_legend(self):
         self.legend_buttons = []
-        for label, count in self.defect_summary.items():
-            color = get_custom_color(label)
-            full_label = get_full_label(label)
+        # Include trace violations if present
+        summary_items = dict(self.defect_summary)
+        label_mapping = {}  # maps display name to internal key
+        for key in list(summary_items.keys()):
+            if key == "trace_violation":
+                label_mapping["Trace Violation"] = key
+            else:
+                label_mapping[get_full_label(key)] = key
+
+        for display_label, internal_key in label_mapping.items():
+            count = summary_items[internal_key]
+            color = get_custom_color(internal_key)  # use internal key for color
 
             frame = tk.Frame(self.legend_frame, bg=self.colors["bg"])
             frame.pack(anchor="w", pady=6, fill="x")
@@ -333,10 +426,18 @@ class ResultsPage(tk.Frame):
                 outline="black" if color == (255,255,255) else ""
             )
 
-            lbl = tk.Label(frame, text=f"{full_label} ({count})", font=(theme.font_bold, 20),
-                           bg=self.colors["bg"], fg=self.colors["text"], anchor="w", justify="left", 
-                           wraplength=self.LEGEND_COLUMN_WIDTH)
+            lbl = tk.Label(
+                frame,
+                text=f"{display_label} ({count})",
+                font=(theme.font_bold, 20),
+                bg=self.colors["bg"],
+                fg=self.colors["text"],
+                anchor="w",
+                justify="left",
+                wraplength=self.LEGEND_COLUMN_WIDTH
+            )
             lbl.pack(side="left", fill="x")
+
 
     # ---------------- Defect Summary ----------------
     def _render_defect_summary(self):
@@ -344,6 +445,10 @@ class ResultsPage(tk.Frame):
         if hasattr(self, "feedback_label") and self.feedback_label:
             self.feedback_label.destroy()
             self.feedback_label = None
+
+        # ---------------- Merge trace violations into defect_summary ----------------
+        if hasattr(self, "trace_coords") and self.trace_coords:
+            self.defect_summary["trace_violation"] = len(self.trace_coords)
 
         if self.grade:
             feedback_text = GRADE_FEEDBACK.get(self.grade, "")
@@ -355,9 +460,9 @@ class ResultsPage(tk.Frame):
                     font=(theme.font_regular, theme.sizes["feedback"]),
                     fg=self.colors["text"],
                     bg=self.colors["bg"],
-                    justify="left",      # centered text
-                    anchor="n",            # anchor top
-                    wraplength=self.LEGEND_COLUMN_WIDTH  # avoid overflow, add some margin
+                    justify="left",      # left-align for readability
+                    anchor="n",          # anchor top
+                    wraplength=self.LEGEND_COLUMN_WIDTH  # avoid overflow
                 )
                 # Place below grade label, with decent vertical gap
                 self.feedback_label.grid(
@@ -367,6 +472,7 @@ class ResultsPage(tk.Frame):
     # ---------------- Download / QR Dialog ----------------
     def show_qr_dialog(self):
         try:
+            # ---------------- Generate PDF ----------------
             # PDF filename
             pdf_filename = os.path.splitext(os.path.basename(self.original_capture_path))[0] + ".pdf"
 
@@ -385,23 +491,47 @@ class ResultsPage(tk.Frame):
                                 confirm_text="OK")
                     return
 
-                pdf = FPDF()
-                pdf.add_page()
-                pdf.set_font("Arial", "B", 30)
-                pdf.cell(0, 10, "Analysis Results", ln=True, align="C")
-                pdf.ln(10)
+                # Always regenerate merged image to ensure trace violations are drawn
+                self._generate_merged_image()
 
-                # Ensure merged image is RGB and save temporary JPEG if needed
+                # Open merged image
                 img_rgb_path = self.result_image_path
-                with Image.open(self.result_image_path) as im:
+                with Image.open(img_rgb_path) as im:
                     if im.mode != "RGB":
                         im = im.convert("RGB")
                         tmp_path = os.path.join(model_folder, "tmp_merged_result.jpg")
                         im.save(tmp_path, format="JPEG")
                         img_rgb_path = tmp_path
 
+                    # Draw trace violations again to be sure
+                    draw = ImageDraw.Draw(im)
+                    trace_color = get_custom_color("trace_violation")
+                    box_size = 6
+                    for idx, coord in enumerate(getattr(self, "trace_coords", [])):
+                        start = tuple(coord["start"])
+                        end = tuple(coord["end"])
+
+                        draw.rectangle([start[0]-box_size, start[1]-box_size, start[0]+box_size, start[1]+box_size],
+                                    outline=trace_color, width=2)
+                        draw.rectangle([end[0]-box_size, end[1]-box_size, end[0]+box_size, end[1]+box_size],
+                                    outline=trace_color, width=2)
+                        draw.line([start, end], fill=trace_color, width=4)
+                        draw.text((start[0]+8, start[1]-8), f"T{idx+1}", fill=trace_color)
+
+                    # Save temporary image for PDF
+                    tmp_path = os.path.join(model_folder, "tmp_for_pdf.jpg")
+                    im.save(tmp_path, format="JPEG")
+                    img_rgb_path = tmp_path
+
+                # ---------------- Create PDF ----------------
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Arial", "B", 30)
+                pdf.cell(0, 10, "Analysis Results", ln=True, align="C")
+                pdf.ln(10)
+
                 # Fit image to PDF width
-                pdf_w = pdf.w - 20  # page width minus margins
+                pdf_w = pdf.w - 20
                 img = Image.open(img_rgb_path)
                 iw, ih = img.size
                 ratio = pdf_w / iw
@@ -409,43 +539,34 @@ class ResultsPage(tk.Frame):
                 pdf.ln(10)
 
                 # ---------------- Draw legend ----------------
-                pdf.set_font("Arial", "B", 16)
+                pdf.set_font("Arial", "B", 18)
                 pdf.cell(0, 8, "Legend:", ln=True)
-                pdf.ln(5)  # space after title
+                pdf.ln(5)
 
-                # Legend rectangle size and spacing
                 rect_size = 5
                 spacing_x = 5
-                spacing_y = 3  # vertical space between legend items
+                spacing_y = 3
 
-                for label, count in self.defect_summary.items():
-                    full_label = get_full_label(label)
+                legend_items = dict(self.defect_summary)
+                for label, count in legend_items.items():
+                    full_label = "Trace Violation" if label == "trace_violation" else get_full_label(label)
                     color = get_custom_color(label)
 
                     x, y = pdf.get_x(), pdf.get_y()
                     pdf.set_fill_color(*color)
-
-                    # Draw black border if color is white, otherwise same as fill to hide border
                     if color == (255, 255, 255):
                         pdf.set_draw_color(0, 0, 0)
                     else:
                         pdf.set_draw_color(*color)
-
-                    # Draw rectangle
+                        
                     pdf.rect(x, y, rect_size, rect_size, style="FD")
-
-                    # Draw text next to rectangle
-                    # Center text vertically relative to rectangle
-                    text_y = y + (rect_size / 4)
-                    pdf.set_xy(x + rect_size + spacing_x, text_y)
+                    pdf.set_xy(x + rect_size + spacing_x, y)
                     pdf.set_text_color(0, 0, 0)
                     pdf.cell(0, rect_size, f"{full_label} ({count})", ln=True)
-
-                    # Move to next line with spacing
                     pdf.ln(spacing_y)
 
                 if self.grade:
-                    pdf.ln(10)  # extra spacing
+                    pdf.ln(10)
                     pdf.set_font("Arial", "B", 28)
                     pdf.set_text_color(0, 0, 0)
                     pdf.cell(0, 10, f"Final Grade: {self.grade}", ln=True, align="C")
@@ -521,15 +642,15 @@ class ResultsPage(tk.Frame):
         close_btn.pack(pady=(0, 5))
         theme.subscribe(close_btn.apply_theme)
 
-
-    # ---------------- Image Resize ----------------
+    # ---------------- Image Resize with correct overlay ----------------
     def resize_image(self, event=None):
         if not self.original_image:
             return
 
+        img_area = self.original_image.width * self.original_image.height
+
         fw = self.img_frame.winfo_width()
         fh = self.img_frame.winfo_height()
-
         if fw <= 1 or fh <= 1:
             return
 
@@ -537,12 +658,60 @@ class ResultsPage(tk.Frame):
         scale = min(fw / iw, fh / ih)
         nw, nh = int(iw * scale), int(ih * scale)
 
+        # Resize base image
         img = self.original_image.resize((nw, nh), Image.LANCZOS)
+        draw = ImageDraw.Draw(img)
+
+        # ---------------- Draw YOLO defects (scaled) ----------------
+        for model_defects in self.defects_per_model.values():
+            for defect in model_defects:
+                if not isinstance(defect, dict) or "bbox" not in defect:
+                    continue
+                x1, y1, x2, y2 = defect["bbox"]
+                bw, bh = x2 - x1, y2 - y1
+                area = bw * bh
+                area_ratio = area / img_area
+                if bw < self.MIN_BOX_W or bh < self.MIN_BOX_H or area < self.MIN_AREA or area_ratio > self.MAX_AREA_RATIO:
+                    continue
+                # scale coords
+                x1_s, y1_s, x2_s, y2_s = int(x1*scale), int(y1*scale), int(x2*scale), int(y2*scale)
+                color = get_custom_color(defect["label"])
+                draw.rectangle([x1_s, y1_s, x2_s, y2_s], outline=color, width=3)
+
+        if self.enable_trace and getattr(self, "trace_coords", None):
+            # ---------------- Draw trace points/lines (scaled) ----------------
+            try:
+                # Run detection only once on original image and store results in coord_logs
+                for model_defects in self.defects_per_model.values():
+                    continue  # already handled YOLO
+                # coord_logs was already generated in _generate_merged_image
+                for idx, coord in enumerate(getattr(self, "trace_coords", [])):
+                    start = (int(coord["start"][0] * scale), int(coord["start"][1] * scale))
+                    end   = (int(coord["end"][0] * scale), int(coord["end"][1] * scale))
+                    trace_color = get_custom_color("trace_violation")
+                    box_size = max(1, int(4 * scale))
+
+                    # Draw rectangles at start/end
+                    draw.rectangle([start[0]-box_size, start[1]-box_size,
+                                    start[0]+box_size, start[1]+box_size],
+                                outline=trace_color, width=2)
+                    draw.rectangle([end[0]-box_size, end[1]-box_size,
+                                    end[0]+box_size, end[1]+box_size],
+                                outline=trace_color, width=2)
+                    # Draw connecting line
+                    draw.line([start, end], fill=trace_color, width=4)
+
+                    # Add label
+                    label_text = f"T{idx+1}"
+                    text_offset = (int(6*scale), int(-6*scale))
+                    draw.text((start[0]+text_offset[0], start[1]+text_offset[1]),
+                            label_text, fill=trace_color)
+            except Exception as e:
+                print(f"[Trace Annotation] Failed: {e}")
 
         self.imgtk = ImageTk.PhotoImage(img)
         self.img_label.configure(image=self.imgtk)
         self.img_label.image = self.imgtk
-
         self.img_label.place(
             relx=0.5,
             rely=0.5,
