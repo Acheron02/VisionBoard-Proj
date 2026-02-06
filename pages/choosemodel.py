@@ -84,7 +84,7 @@ class ChooseModel(tk.Frame):
         btn1, lbl1, frm1 = create_item(
             0, 0,
             "Model 1",
-            "Short and Open Circuit, 90° Angle Traces",
+            "Short and Open Circuit, 90° Angle Traces, Trace Clearance Violation",
             lambda: self.select_model(1)
         )
 

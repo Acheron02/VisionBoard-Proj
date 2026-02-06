@@ -24,8 +24,8 @@ from backend.generateURL import generate_download_url  # Your URL generator
 
 # ---------------- LABELS ----------------
 DEFECT_FULL_LABELS = {
-    "short": "Short Circuit",
     "open": "Open Circuit",
+    "short": "Short Circuit",
     "90": "90° Angle Traces",
     "ps": "Poor Solder",
     "sb": "Solder Bridges",
@@ -44,17 +44,19 @@ GRADE_FEEDBACK = {
     )
 }
 
-
 def get_custom_color(label, custom_colors=None):
-    if custom_colors is None:
+    # ensure custom_colors is always a dict
+    if not isinstance(custom_colors, dict):
         custom_colors = {}
 
     rgb = custom_colors.get(label)
-
     if rgb is None:
-        rgb = theme.colors().get("defect_colors", {}).get(label, (255, 255, 255))
+        rgb = theme.colors().get("defect_colors", {}).get(label)
+    if rgb is None:
+        rgb = (255, 0, 0)  # fallback
 
-    return rgb 
+    return rgb
+
 
 def get_full_label(label):
     return DEFECT_FULL_LABELS.get(label, label)
@@ -299,9 +301,8 @@ class ResultsPage(tk.Frame):
         self.original_image = pil_img  # used by resize_image()
 
         # Merge trace violations into defect summary
-        if self.enable_trace:
-            self.defect_summary["trace_violation"] = len(self.trace_coords)
-        self._defect_summary_initialized = True
+        if self.enable_trace and hasattr(self, "trace_coords"):
+            self.defect_summary["trace_violation"] = len(self.trace_coords) if isinstance(self.trace_coords, list) else 0
 
         # Refresh legend and feedback
         self._render_defect_summary()
@@ -394,7 +395,7 @@ class ResultsPage(tk.Frame):
 
         for display_label, internal_key in label_mapping.items():
             count = summary_items[internal_key]
-            color = get_custom_color(internal_key)  # use internal key for color
+            color = get_custom_color(internal_key, self.colors.get("defect_colors", {}))  # use internal key for color
 
             frame = tk.Frame(self.legend_frame, bg=self.colors["bg"])
             frame.pack(anchor="w", pady=6, fill="x")
@@ -468,6 +469,8 @@ class ResultsPage(tk.Frame):
                 self.feedback_label.grid(
                     row=2, column=0, sticky="n", pady=(0,10)
                 )
+            else:
+                self.feedback_label = None
 
     # ---------------- Download / QR Dialog ----------------
     def show_qr_dialog(self):

@@ -157,18 +157,30 @@ class CameraPage(tk.Frame):
             self.title_label.config(text="Camera")
 
     # ================= CAMERA =================
-    def init_camera(self):
+    def init_camera(self, max_attempts=5, wait_time=0.5):
         if self.cap:
             self.cap.release()
+            self.cap = None
 
-        self.cap = cv2.VideoCapture(self.CAMERA_INDEX, cv2.CAP_V4L2)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        for attempt in range(max_attempts):
+            self.cap = cv2.VideoCapture(self.CAMERA_INDEX, cv2.CAP_V4L2)
+            if self.cap.isOpened():
+                # Set resolution to 1280x720
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                self.cap.set(cv2.CAP_PROP_FPS, 30)
 
-        actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"[Camera] Resolution set to: {actual_w}x{actual_h}")
+                actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                print(f"[Camera] Resolution set to: {actual_w}x{actual_h}")
+                break
+
+            print(f"[Camera] Attempt {attempt+1} failed, retrying in {wait_time}s...")
+            time.sleep(wait_time)
+        else:
+            print("[Camera] Failed to open camera after multiple attempts.")
+            self.cap = None
+
 
     def camera_loop(self):
         while self.running and not self._destroyed:
@@ -220,34 +232,42 @@ class CameraPage(tk.Frame):
             model_config=model_cfg,
             enable_trace=(self.model_name.lower() == "model 1")
         )
-        result = pipeline.run(
-            image_path=image_path,
-            annotated_dir=self.annotated_dir,
-        )
+        result = pipeline.run(image_path=image_path)
 
         if result is None:
             self.show_no_pcb_dialog()
             return
 
+        annotated_path = result.get("annotated_image_path", image_path)
         defect_summary = result.get("defect_summary", {})
+
         self.cleanup()
         self.show_page(
             ResultsPage,
             monitor=self.monitor,
-            original_capture_path=result["annotated_image_path"],
-            result_image_path=result["annotated_image_path"],
+            original_capture_path=annotated_path,
+            result_image_path=annotated_path,
             model_name=self.model_name,
-            defect_summary=result.get("defect_summary"),
-            defects_per_model=result.get("defects_per_model"),
+            defect_summary=defect_summary,
             grade=None
         )
 
+
     # ================= FINAL GRADING =================
     def run_final_grading(self, image_path):
+        # Prepare list of folders for final grading
+        model_folders = [
+            self.model_paths["Model 1"],
+            self.model_paths["Model 2"]
+        ]
+
+        # Pass the configs; make sure keys match folder paths
         pipeline = FinalGradingPipeline(
-            model_a_paths=[self.model_paths["Model 1"]],
-            model_b_paths=[self.model_paths["Model 2"]],
-            model_configs=self.model_configs
+            model_folders=model_folders,
+            model_configs={
+                self.model_paths["Model 1"]: self.model_configs["Model 1"],
+                self.model_paths["Model 2"]: self.model_configs["Model 2"],
+            }
         )
 
         result = pipeline.run(image_path=image_path, annotated_dir=self.annotated_dir)
@@ -262,10 +282,11 @@ class CameraPage(tk.Frame):
             monitor=self.monitor,
             original_capture_path=result["annotated_image_path"],
             model_name="Final PCB Grading",
-            defect_summary=result.get("defect_summary"),
+            defect_summary=defect_summary,
             defects_per_model=result.get("defects_per_model"),
             grade=result.get("grade", "Pass")
         )
+
 
     # ================= DIALOGS =================
     def show_no_pcb_dialog(self):

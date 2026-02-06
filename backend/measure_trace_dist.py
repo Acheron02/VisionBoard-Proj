@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 
-MAX_DISTANCE_PX = 20
+MAX_DISTANCE_PX = 15
 MIN_TRACE_AREA = 500
-EDGE_SAMPLES = 20
-PARALLEL_ANGLE_THRESHOLD = 15  # degrees
+EDGE_SAMPLES = 15
+PARALLEL_ANGLE_THRESHOLD = 5  # degrees
 
 # ---------- Helpers ----------
 def sample_edge_points(contour, n):
