@@ -1,12 +1,14 @@
 import os
 import json
 import cv2
+from pathlib import Path
 from datetime import datetime
 from backend.trace_detector import detect_traces
 from ui.theme import theme  # optional for color choices
 
 # ------------------------- Folders -------------------------
-TRACE_SAVE_DIR = "/home/jmc2/VisionBoard-Proj/pcb_trace_results"
+BASE_DIR = Path(__file__).resolve().parent.parent
+TRACE_SAVE_DIR = BASE_DIR / "VisionBoard-Proj/pcb_trace_results"
 TRACE_LOG_DIR = os.path.join(TRACE_SAVE_DIR, "trace_data")
 
 os.makedirs(TRACE_SAVE_DIR, exist_ok=True)
